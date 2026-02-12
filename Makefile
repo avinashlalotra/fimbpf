@@ -4,15 +4,17 @@
 # I know one way i.e just boot it on qemu and run the generate section below
 # their might be a way to do this in kernel build process
 
-all:
+all: generate
 	go build
 run:
 	./vfs_ops_monitor
 
-generate:
+generate: src/* bpfInterface/gen.go
 	bpftool btf dump file /sys/kernel/btf/vmlinux format c > src/vmlinux.h
-	mkdir -p ebpf
-	go generate
+	go generate ./bpfInterface
+
 
 clean:
-	rm ebpf/*  vfs_ops_monitor
+	go clean -cache -testcache
+	rm bpfInterface/vfslsm* vfs_ops_monitor
+	

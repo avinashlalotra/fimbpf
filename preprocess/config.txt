@@ -1,0 +1,24 @@
+# directories to monitor
+# D: /home/avinash/Desktop/FileIntegrity/eBPF_learn/ebpf_VFS_ops/testing/rootfs/boot
+# D: /home/avinash/Desktop/FileIntegrity/eBPF_learn/ebpf_VFS_ops/testing/rootfs/etc
+D: /home/avinash/Desktop/FileIntegrity/eBPF_learn/ebpf_VFS_ops/testing/rootfs/home
+
+# excluding particular files and directories
+E: /home/avinash/Desktop/FileIntegrity/eBPF_learn/ebpf_VFS_ops/testing/rootfs/etc/systemd
+
+# include particular files
+IF: /home/avinash/Desktop/FileIntegrity/eBPF_learn/ebpf_VFS_ops/testing/rootfs/hello.txt
+
+# excluding particular file extensions
+EE: .json
+EE: .jsonl
+EE: .swp
+EE: .tmp
+EE: .log
+
+# excluding particular file suffixes
+ES: ~
+ES: .lock
+
+
+# Excluding patterns is not supported yet

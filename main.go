@@ -1,8 +1,170 @@
 package main
 
-import "fmt"
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"fimbpf/bpfloader"
+	"fimbpf/eventcore"
+	"fimbpf/netlog"
+	"fimbpf/preprocess"
+	"io"
+	"log"
+	"log/syslog"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/ringbuf"
+)
+
+func initRuntimeLogger() io.Closer {
+	// Try syslog first
+	writer, err := syslog.New(syslog.LOG_INFO|syslog.LOG_LOCAL0, "FileIntegrityMonitoring")
+	if err == nil {
+		log.SetOutput(writer)
+		log.Println("Logging initialized: syslog")
+		return writer
+	}
+
+	log.Printf("Syslog unavailable: %v. Falling back to file logging.", err)
+
+	// Fallback to file
+	file, ferr := os.OpenFile(
+		"/var/log/FileIntegrityMonitoring.log",
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+		0644,
+	)
+	if ferr == nil {
+		log.SetOutput(file)
+		log.Println("Logging initialized: file fallback")
+		return file
+	}
+
+	// Final fallback: stderr
+	log.Printf("File logging failed: %v. Using stderr.", ferr)
+	log.SetOutput(os.Stderr)
+	return nil
+}
 
 func main() {
 
-	fmt.Println("Hello")
+	var rd *ringbuf.Reader
+	var writer io.Closer
+
+	var policy preprocess.Cache
+	var bpf *bpfloader.BPF
+
+	var links []link.Link
+	var err error
+
+	// Cleanup
+	defer func() {
+
+		// Cleanup ring buffer reader
+		if rd != nil {
+			rd.Close()
+		}
+
+		// Cleanup attached programs
+		for _, link := range links {
+			if link != nil {
+				link.Close()
+			}
+		}
+		// Cleanup loaded objects
+		bpf.Objects.Close()
+
+		// Cleanup syslog writer
+		if writer != nil {
+			writer.Close()
+		}
+
+	}()
+
+	if os.Geteuid() != 0 {
+		log.Fatal("requires root")
+	}
+
+	/* Load policy */
+	policy, err = preprocess.ParseConfig("/etc/fimbpf/config.txt")
+	if err != nil {
+		log.Fatalf("parsing policy: %v", err)
+	}
+
+	/* Load eBPF objects */
+	bpf = bpfloader.InitBPF()
+	if err := bpf.Load(bpf.Objects, nil); err != nil {
+		log.Fatalf("loading eBPF objects: %v", err)
+	}
+
+	/* Populate policy map */
+	count, err := policy.LoadTrackedFileMap(bpf)
+	if err != nil {
+		log.Printf("loading policy map: %v", err)
+	}
+	if count == 0 {
+		log.Printf("No policy loaded")
+		return
+	}
+
+	/* Attach eBPF programs */
+	links, err = bpf.AttachPrograms()
+	if err != nil {
+		log.Printf("ERROR: Couldn't attach eBPF programs : %v", err)
+		return
+	}
+
+	/* Create ring buffer reader */
+	rd, err = ringbuf.NewReader(bpf.Objects.Events)
+	if err != nil {
+		log.Fatalf("opening ring buffer reader: %v", err)
+	}
+
+	log.Println("Successfully loaded eBPF program. Monitoring VFS operations...")
+
+	// Switch to runtime logger
+	closer := initRuntimeLogger()
+	if closer != nil {
+		defer closer.Close()
+	}
+
+	/* Handle CTRL-C */
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+
+	/* Read events from ring buffer in a goroutine */
+	go func() {
+		for {
+			record, err := rd.Read()
+			if err != nil {
+				if errors.Is(err, ringbuf.ErrClosed) {
+					log.Println("Ring buffer closed, stopping event reader")
+					return
+				}
+				log.Printf("reading from ring buffer: %v", err)
+				continue
+			}
+
+			// Parse the event
+			var event bpfloader.FileChangeEvent
+			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+				log.Printf("parsing event: %v", err)
+				continue
+			}
+
+			// Process and display the event
+			payload := eventcore.ProcessEvent(&event, bpf, &policy)
+			eventcore.PrintPayload(payload)
+			netlog.SendPOST("http://localhost:8080/api", payload)
+
+		}
+	}()
+
+	/* Wait for signal */
+	<-sig
+	log.Println("Received Termination signal, shutting down...")
+
+	return
 }

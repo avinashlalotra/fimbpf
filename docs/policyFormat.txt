@@ -1,0 +1,46 @@
+================================================================================
+POLICY CONFIGURATION FORMAT SPECIFICATION
+================================================================================
+
+SYNTAX
+------
+
+rule        ::= command ":" whitespace? argument
+command     ::= "D" | "E" | "IF" | "EE" | "ES"
+argument    ::= path | list
+path        ::= absolute_path
+list        ::= item ("," item)*
+absolute_path must start with "/"
+whitespace after colon is optional
+
+
+COMMANDS
+--------
+
+D: <path>           Include directory (recursive) || include Single file
+E: <path>           Exclude directory (recursive, skip subtree during walk)
+IF: <path>          Force include file/directory (overrides all exclusions)
+EE: <ext>           Exclude file extensions (must include dot: .log not log)
+ES: <suf>           Exclude filename suffixes (before extension, no dot)
+
+
+PRECEDENCE
+----------
+
+IF > E > EE > ES > D > default(exclude)
+
+Evaluation terminates on first match within each precedence level.
+
+
+EXAMPLE
+-------
+
+D: /opt/app
+E: /opt/app/cache
+EE: .log        // exclude files with .log extension
+ES: _old        // exclude files with _old suffix
+IF: /opt/app/cache/critical.log
+
+================================================================================
+END OF SPECIFICATION
+================================================================================

@@ -1,0 +1,153 @@
+================================================================================
+POLICY PARSER SPECIFICATION
+================================================================================
+
+Version: 1.0 (Embedded)
+Target: Embedded File Integrity Monitor (FIM)
+Date: 2026-02-06
+
+
+OVERVIEW
+--------
+
+Parser reads config.txt, validates syntax/semantics, walks filesystem per 
+policy, and generates maps for eBPF/userspace runtime.
+
+
+ARCHITECTURE
+------------
+
+Input:  config.txt
+Output: FileMap (inode→bool), DirTree (path reconstruction)
+
+Flow:
+  config.txt → Parser → Policy → Filesystem Walk → Maps → eBPF
+
+
+PROCESSING STAGES
+-----------------
+
+1. Read & Tokenize
+   - Read line-by-line
+   - Split at ':' into (command, argument)
+   - Track line numbers for errors
+
+2. Syntax Validation
+   - Verify command in {D, E, IF, EE, ES}
+   - Verify colon present
+   - Verify argument non-empty
+   - Verify format (paths start with /, extensions have dots)
+
+3. Semantic Validation
+   - Check duplicate rules
+   - Warn on IF under E directory
+   - Warn on redundant D rules
+
+4. Filesystem Walk
+   - For each D: walk directory if exists (WARN if not)
+   - For each file: apply precedence rules
+   - For each IF: add if exists (WARN if not)
+   - Skip E directories (don't recurse)
+
+5. Map Generation
+   - FileMap: inode → true
+   - DirTree: hierarchical path structure
+
+
+DATA STRUCTURES
+---------------
+
+Token:
+  LineNum  int
+  Command  string
+  Argument string
+
+Policy:
+  IncludeDirs   []string    // D
+  ExcludeDirs   []string    // E
+  IncludeFiles  []string    // IF
+  ExcludeExts   []string    // EE
+  ExcludeSuffs  []string    // ES
+
+
+Suffix extraction:
+  basename = "config_backup.txt"
+  extension = ".txt"
+  suffix = "config_backup"  (basename - extension)
+
+
+ERROR HANDLING
+--------------
+
+Syntax errors: Abort, exit code 1
+Semantic errors: Abort, exit code 2
+Filesystem errors (permission denied): Abort, exit code 3
+Resource errors (OOM): Abort, exit code 4
+
+Non-existent paths (D, E, IF): WARN and skip
+
+
+Error format:
+  ERROR [Line N]: <message>
+    <offending line>
+    ^
+  <suggestion>
+
+
+VALIDATION RULES
+----------------
+
+Syntax:
+  - Command in {D, E, IF, EE, ES}
+  - Colon present
+  - Argument non-empty
+  - Paths start with /
+  - Extensions start with .
+  - Lists comma-separated, no spaces
+
+Semantic:
+  - No duplicate rules
+  - Paths normalized
+
+
+OPTIMIZATION
+------------
+
+Memory:
+  - Hash sets for IF, EE, ES (O(1) lookup)
+  - Prefix tree for D, E (efficient prefix matching)
+  - String interning for repeated paths
+
+Time:
+  - Early exit on first match
+  - Skip E directories during walk
+  - Stat caching
+
+
+Exit codes:
+  0 = Success
+  1 = Syntax error
+  2 = Semantic error
+  3 = Filesystem error
+  4 = Resource error
+  5 = Internal error
+
+
+EXAMPLE OUTPUT
+--------------
+
+Simple config (D: /opt/app, E: /opt/app/cache, EE: .log):
+
+  Parsing /etc/fim/config.txt...
+  Rules parsed: 3 (1D, 1E, 1EE)
+  Walking filesystem...
+  Found 1,247 files, excluded 112
+  Final: 1,135 files to monitor
+  FileMap: 1,135 entries (9KB)
+  DirTree: 47 directories (5KB)
+  Total: 14KB, startup 0.8s
+
+
+================================================================================
+END OF SPECIFICATION
+================================================================================
