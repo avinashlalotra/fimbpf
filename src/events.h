@@ -17,7 +17,7 @@ static int populate_transaction(struct inode *inode,
   uid_gid = bpf_get_current_uid_gid();
   transaction->uid = (__u32)(uid_gid & 0xffffffff);
   transaction->gid = (__u32)(uid_gid >> 32);
-  transaction->mtime = BPF_CORE_READ(inode, i_ctime_sec);
+
   // transaction->change_type = CREATE;
 
 #ifdef DEBUG

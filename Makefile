@@ -7,14 +7,14 @@
 all: generate
 	go build
 run:
-	./vfs_ops_monitor
+	./watchd
 
-generate: src/* bpfInterface/gen.go
+generate: src/* bpfloader/gen.go
 	bpftool btf dump file /sys/kernel/btf/vmlinux format c > src/vmlinux.h
-	go generate ./bpfInterface
+	go generate ./bpfloader
 
 
 clean:
 	go clean -cache -testcache
-	rm bpfInterface/vfslsm* vfs_ops_monitor
+	rm bpfloader/fim* watchd
 	

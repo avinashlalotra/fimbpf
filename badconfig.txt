@@ -1,0 +1,7 @@
+# include directory missing :
+D:/home
+# invalid command C
+C: /root
+
+# exclude folder empty arg
+E: 

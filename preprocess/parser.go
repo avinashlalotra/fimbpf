@@ -2,12 +2,12 @@ package preprocess
 
 import (
 	"bufio"
-	"fimbpf/bpfloader"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"watchd/bpfloader"
 )
 
 type token struct {
@@ -25,7 +25,7 @@ type excludePolicy struct {
 
 // ----------------------------------------------------------------------------------------------------------------
 /* Read and Tokenize*/
-func readConfig(configPath string) ([]token, error) {
+func ReadConfig(configPath string) ([]token, error) {
 
 	f, err := os.Open(configPath)
 	if err != nil {
@@ -60,7 +60,7 @@ func readConfig(configPath string) ([]token, error) {
 }
 
 // Validate Syntax
-func syntaxValidation(tokens []token) error {
+func SyntaxValidation(tokens []token) error {
 	for _, token := range tokens {
 		if token.command != "D" && token.command != "E" && token.command != "IF" && token.command != "EE" && token.command != "ES" {
 			return fmt.Errorf("ERROR [Line %d]: invalid command: %s\n  %s: %s\n  ^\nvalid commands: D, E, IF, EF, EE, ES", token.lineNum, token.command, token.command, token.argument)

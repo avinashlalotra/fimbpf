@@ -1,0 +1,25 @@
+
+fimbpf <command> [flags]
+
+commands:   
+    run         Start the fimbpf daemon (foreground, systemd-managed)
+
+    validate    Validate configuration file and exit
+
+    version     Print version, build info, and exit
+
+    status      Check daemon status (running/not running)
+
+    help        Prints help 
+
+Flags:
+    --config string        Path to config file 
+                           (default: /etc/fimbpf/config.txt)
+
+    --api-url string       Remote API endpoint
+
+    --api-auth string      Path to API auth JSON file
+
+    --dry-run              for dev testing
+
+

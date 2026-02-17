@@ -4,167 +4,242 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fimbpf/bpfloader"
-	"fimbpf/eventcore"
-	"fimbpf/netlog"
-	"fimbpf/preprocess"
-	"io"
+	"fmt"
 	"log"
-	"log/syslog"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
+	"watchd/bpfloader"
+	"watchd/eventcore"
+	"watchd/netlog"
+	"watchd/preprocess"
 
-	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/spf13/cobra"
 )
 
-func initRuntimeLogger() io.Closer {
-	// Try syslog first
-	writer, err := syslog.New(syslog.LOG_INFO|syslog.LOG_LOCAL0, "FileIntegrityMonitoring")
-	if err == nil {
-		log.SetOutput(writer)
-		log.Println("Logging initialized: syslog")
-		return writer
-	}
+var (
+	config  string
+	apifile string
 
-	log.Printf("Syslog unavailable: %v. Falling back to file logging.", err)
-
-	// Fallback to file
-	file, ferr := os.OpenFile(
-		"/var/log/FileIntegrityMonitoring.log",
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND,
-		0644,
-	)
-	if ferr == nil {
-		log.SetOutput(file)
-		log.Println("Logging initialized: file fallback")
-		return file
-	}
-
-	// Final fallback: stderr
-	log.Printf("File logging failed: %v. Using stderr.", ferr)
-	log.SetOutput(os.Stderr)
-	return nil
-}
+	version   = "1.0.0"
+	buildDate = "2026-02-16"
+	gitCommit = "dev"
+)
 
 func main() {
 
-	var rd *ringbuf.Reader
-	var writer io.Closer
+	rootCmd := &cobra.Command{
+		Use:   "watchd",
+		Short: "watchd -eBPF-powered file activity monitor for Linux",
+	}
 
-	var policy preprocess.Cache
-	var bpf *bpfloader.BPF
+	// Global flags
+	rootCmd.PersistentFlags().StringVar(
+		&config,
+		"config",
+		"/etc/watchd/config.txt",
+		"Path to config file",
+	)
 
-	var links []link.Link
-	var err error
+	rootCmd.PersistentFlags().StringVar(
+		&apifile,
+		"api",
+		"",
+		"Path to API JSON file",
+	)
 
-	// Cleanup
-	defer func() {
+	// ---------------- RUN ----------------
+	runCmd := &cobra.Command{
+		Use:   "run",
+		Short: "Start the watchd",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
 
-		// Cleanup ring buffer reader
-		if rd != nil {
-			rd.Close()
-		}
+			var enableNet bool
 
-		// Cleanup attached programs
-		for _, link := range links {
-			if link != nil {
-				link.Close()
+			if os.Geteuid() != 0 {
+				log.Fatal("requires root")
 			}
-		}
-		// Cleanup loaded objects
-		bpf.Objects.Close()
-
-		// Cleanup syslog writer
-		if writer != nil {
-			writer.Close()
-		}
-
-	}()
-
-	if os.Geteuid() != 0 {
-		log.Fatal("requires root")
-	}
-
-	/* Load policy */
-	policy, err = preprocess.ParseConfig("/etc/fimbpf/config.txt")
-	if err != nil {
-		log.Fatalf("parsing policy: %v", err)
-	}
-
-	/* Load eBPF objects */
-	bpf = bpfloader.InitBPF()
-	if err := bpf.Load(bpf.Objects, nil); err != nil {
-		log.Fatalf("loading eBPF objects: %v", err)
-	}
-
-	/* Populate policy map */
-	count, err := policy.LoadTrackedFileMap(bpf)
-	if err != nil {
-		log.Printf("loading policy map: %v", err)
-	}
-	if count == 0 {
-		log.Printf("No policy loaded")
-		return
-	}
-
-	/* Attach eBPF programs */
-	links, err = bpf.AttachPrograms()
-	if err != nil {
-		log.Printf("ERROR: Couldn't attach eBPF programs : %v", err)
-		return
-	}
-
-	/* Create ring buffer reader */
-	rd, err = ringbuf.NewReader(bpf.Objects.Events)
-	if err != nil {
-		log.Fatalf("opening ring buffer reader: %v", err)
-	}
-
-	log.Println("Successfully loaded eBPF program. Monitoring VFS operations...")
-
-	// Switch to runtime logger
-	closer := initRuntimeLogger()
-	if closer != nil {
-		defer closer.Close()
-	}
-
-	/* Handle CTRL-C */
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-
-	/* Read events from ring buffer in a goroutine */
-	go func() {
-		for {
-			record, err := rd.Read()
-			if err != nil {
-				if errors.Is(err, ringbuf.ErrClosed) {
-					log.Println("Ring buffer closed, stopping event reader")
-					return
+			// Vaidate command line arguments
+			if apifile != "" {
+				if err := netlog.InitApiAuth(apifile); err != nil {
+					log.Printf("Error initializing API auth: %v", err)
+				} else {
+					enableNet = true
 				}
-				log.Printf("reading from ring buffer: %v", err)
-				continue
+			} else {
+				log.Println("API file is required, use --api")
+				log.Println("Disabled network logging")
 			}
 
-			// Parse the event
-			var event bpfloader.FileChangeEvent
-			if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
-				log.Printf("parsing event: %v", err)
-				continue
+			// parse config file
+			policy, err := preprocess.ParseConfig(config)
+			if err != nil {
+				log.Fatalf("parsing policy: %v", err)
 			}
 
-			// Process and display the event
-			payload := eventcore.ProcessEvent(&event, bpf, &policy)
-			eventcore.PrintPayload(payload)
-			netlog.SendPOST("http://localhost:8080/api", payload)
+			/* Load eBPF objects */
+			bpf := bpfloader.InitBPF()
+			if err := bpf.Load(bpf.Objects, nil); err != nil {
+				log.Fatalf("loading eBPF objects: %v", err)
+			}
 
-		}
-	}()
+			/* Populate policy map */
+			count, err := policy.LoadTrackedFileMap(bpf)
+			if err != nil {
+				log.Printf("loading policy map: %v", err)
+			}
+			if count == 0 {
+				log.Printf("No policy loaded")
+				return
+			}
 
-	/* Wait for signal */
-	<-sig
-	log.Println("Received Termination signal, shutting down...")
+			/* Attach eBPF programs */
+			links, err := bpf.AttachPrograms()
+			if err != nil {
+				log.Printf("ERROR: Couldn't attach eBPF programs : %v", err)
+				return
+			}
 
-	return
+			/* Create ring buffer reader */
+			rd, err := ringbuf.NewReader(bpf.Objects.Events)
+			if err != nil {
+				log.Fatalf("opening ring buffer reader: %v", err)
+			}
+
+			// Cleanup
+			defer func() {
+
+				// Cleanup ring buffer reader
+				if rd != nil {
+					rd.Close()
+				}
+
+				// Cleanup attached programs
+				for _, link := range links {
+					if link != nil {
+						link.Close()
+					}
+				}
+				// Cleanup loaded objects
+				bpf.Objects.Close()
+
+			}()
+
+			log.Println("Successfully loaded eBPF program. Monitoring VFS operations...")
+
+			/* Handle CTRL-C */
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+
+			/* Read events from ring buffer in a goroutine */
+			go func() {
+				for {
+					record, err := rd.Read()
+					if err != nil {
+						if errors.Is(err, ringbuf.ErrClosed) {
+							log.Println("Ring buffer closed, stopping event reader")
+							return
+						}
+						log.Printf("reading from ring buffer: %v", err)
+						continue
+					}
+
+					// Pstringarse the event
+					var event bpfloader.FileChangeEvent
+					if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &event); err != nil {
+						log.Printf("parsing event: %v", err)
+						continue
+					}
+
+					// Process and display the event
+					payload := eventcore.ProcessEvent(&event, bpf, &policy)
+					eventcore.PrintPayload(payload)
+					if enableNet {
+						netlog.SendPOST(payload)
+					}
+
+				}
+			}()
+
+			/* Wait for signal */
+			<-sig
+			log.Println("Received Termination signal, shutting down...")
+
+			return
+
+		},
+	}
+
+	// ---------------- VALIDATE ----------------
+	validateCmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate configuration file and exit",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+
+			cfgPath := config
+
+			if cfgPath == "" {
+				return fmt.Errorf("config file path is required, use --config")
+			}
+
+			tokens, err := preprocess.ReadConfig(cfgPath)
+			if err != nil {
+				return fmt.Errorf("error reading config file: %s", err)
+			}
+			if err := preprocess.SyntaxValidation(tokens); err != nil {
+				return fmt.Errorf("error validating config file: %s", err)
+			}
+
+			fmt.Println("Config file is valid")
+			return nil
+		},
+	}
+
+	// ---------------- VERSION ----------------
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version, build info, and exit",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("Version: %s\n", version)
+			fmt.Printf("Git Commit: %s\n", gitCommit)
+			fmt.Printf("Build Date: %s\n", buildDate)
+		},
+	}
+
+	// ---------------- STATUS ----------------
+	const serviceName = "watchd.service"
+
+	var statusCmd = &cobra.Command{
+		Use:   "status",
+		Short: "Check daemon status",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+
+			out, err := exec.Command("systemctl", "is-active", serviceName).Output()
+			status := strings.TrimSpace(string(out))
+
+			if err != nil || status != "active" {
+				fmt.Println("watchd is down")
+				os.Exit(1)
+			}
+
+			fmt.Println("watchd is up")
+		},
+	}
+
+	// Add commands
+	rootCmd.AddCommand(runCmd)
+	rootCmd.AddCommand(validateCmd)
+	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(statusCmd)
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
 }
