@@ -34,7 +34,7 @@ func (p *Cache) LoadTrackedFileMap(bpf *bpfloader.BPF) (int, error) {
 	var totalEntries = len(p.LookupTable)
 	fmt.Println("Total entries in policy Table ", totalEntries)
 	for k, v := range p.LookupTable {
-		fmt.Println("Loading key ( ", k.Inode_number, ", ", k.Dev, ")")
+		fmt.Println("Loading key ( ", k.InodeNumber, ", ", k.Dev, ")")
 		if err := bpf.Objects.PolicyTable.Put(k, v); err != nil {
 			fmt.Println("Error loading entry into the policy table")
 			fmt.Println("Total of ", totalEntries-count, " entries not loaded")

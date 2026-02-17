@@ -106,11 +106,11 @@ func walkDir(dir string, policyMap *bpfloader.TrackedFileMap, exlPol *excludePol
 	stat := info.Sys().(*syscall.Stat_t)
 
 	key := bpfloader.TrackedFileKey{
-		Inode_number: uint64(stat.Ino),
-		Dev:          rawDev(stat),
+		InodeNumber: uint64(stat.Ino),
+		Dev:         rawDev(stat),
 	}
 	value := bpfloader.TrackedFileValue{
-		Val: 1,
+		FileSize: info.Size(),
 	}
 
 	if _, ok := (*policyMap)[key]; ok {
@@ -165,11 +165,11 @@ func addFile(file string, policyMap *bpfloader.TrackedFileMap) {
 	stat := info.Sys().(*syscall.Stat_t)
 
 	key := bpfloader.TrackedFileKey{
-		Inode_number: uint64(stat.Ino),
-		Dev:          rawDev(stat),
+		InodeNumber: uint64(stat.Ino),
+		Dev:         rawDev(stat),
 	}
 	value := bpfloader.TrackedFileValue{
-		Val: 1,
+		FileSize: info.Size(),
 	}
 
 	if _, ok := (*policyMap)[key]; ok {
@@ -227,9 +227,9 @@ func generatePolicyFrompath(filepath string) (bpfloader.TrackedFile, error) {
 		return policy, fmt.Errorf("failed to get Stat_t")
 	}
 
-	policy.Key.Inode_number = uint64(stat.Ino)
+	policy.Key.InodeNumber = uint64(stat.Ino)
 	policy.Key.Dev = rawDev(stat)
-	policy.Value.Val = 1
+	policy.Value.FileSize = info.Size()
 
 	return policy, nil
 }

@@ -17,13 +17,13 @@ import (
 //
 // A file is identified using its inode number and device ID.
 type TrackedFileKey struct {
-	Inode_number uint64 // Inode_number is the inode number of the file.
-	Dev          uint64 // Dev is the device ID on which the file resides.
+	InodeNumber uint64 // Inode_number is the inode number of the file.
+	Dev         uint64 // Dev is the device ID on which the file resides.
 }
 
 // TrackedFileValue represents the value stored in the tracked file map.
 type TrackedFileValue struct {
-	Val uint8 // Val indicates whether the file is being tracked (1 = tracked).
+	FileSize int64 // Val indicates whether the file is being tracked (1 = tracked).
 }
 
 // TrackedFile represents a single key-value pair in the tracked file map.
@@ -51,16 +51,12 @@ type FileChangeEvent struct {
 	InodeNumber uint64
 	Dev         uint64
 
-	Uid uint32
-	Gid uint32
-
-	ChangeType uint64
-	Mtime      int64
+	Uid        uint32
+	ChangeType uint32
 
 	TtyIndex uint32
 	TtyMajor int32
 
-	FileSize   int64
 	BeforeSize int64
 	AfterSize  int64
 
@@ -96,22 +92,17 @@ func InitBPF() *BPF {
 func (b *BPF) UpdateLookupTable(event *FileChangeEvent) {
 
 	key := TrackedFileKey{
-		Inode_number: event.InodeNumber,
-		Dev:          event.Dev,
+		InodeNumber: event.InodeNumber,
+		Dev:         event.Dev,
 	}
 
 	value := TrackedFileValue{
-		Val: 1,
+		FileSize: event.AfterSize,
 	}
 
 	// create
 	if event.ChangeType == 1 {
 		b.Objects.PolicyTable.Put(key, value)
-	}
-
-	// delete
-	if event.ChangeType == 3 {
-		b.Objects.PolicyTable.Delete(key)
 	}
 
 }
@@ -127,6 +118,7 @@ func (b *BPF) AttachPrograms() ([]link.Link, error) {
 	var err string
 
 	attachLSM := func(prog *ebpf.Program, name string) {
+
 		l, linkErr := link.AttachLSM(link.LSMOptions{
 			Program: prog,
 		})
@@ -137,25 +129,27 @@ func (b *BPF) AttachPrograms() ([]link.Link, error) {
 		links = append(links, l)
 	}
 
-	attachTracing := func(prog *ebpf.Program, name string) {
-		l, linkErr := link.AttachTracing(link.TracingOptions{
-			Program: prog,
-		})
-		if linkErr != nil {
-			err += fmt.Sprintf("ERROR attaching %s: %v\n", name, linkErr)
-			return
-		}
-		links = append(links, l)
-	}
+	// attachTracing := func(prog *ebpf.Program, name string) {
+	// 	l, linkErr := link.AttachTracing(link.TracingOptions{
+	// 		Program: prog,
+	// 	})
+	// 	if linkErr != nil {
+	// 		err += fmt.Sprintf("ERROR attaching %s: %v\n", name, linkErr)
+	// 		return
+	// 	}
+	// 	links = append(links, l)
+	// }
 
 	// LSM Hooks
-	attachLSM(b.Objects.InodeInitSecurityHook, "inode_create hook")
-	attachLSM(b.Objects.PathRmdirHook, "path_rmdir hook")
-	attachLSM(b.Objects.PathUnlinkHook, "path_unlink hook")
+	// attachLSM(b.Objects.InodeInitSecurityHook, "inode_create hook")
+	// attachLSM(b.Objects.PathRmdirHook, "path_rmdir hook")
+	// attachLSM(b.Objects.PathUnlinkHook, "path_unlink hook")
+	attachLSM(b.Objects.WatchdD_instantiate, "d_instantiate hook")
+	attachLSM(b.Objects.WatchdInodeUnlink, "inode_unlink hook")
 
-	// Tracing Hooks
-	attachTracing(b.Objects.VfsWriteEntryHook, "vfs_write entry hook")
-	attachTracing(b.Objects.VfsWriteHook, "vfs_write hook")
+	// // Tracing Hooks
+	// attachTracing(b.Objects.VfsWriteEntryHook, "vfs_write entry hook")
+	// attachTracing(b.Objects.VfsWriteHook, "vfs_write hook")
 
 	// If None is loaded then error
 	for _, link := range links {

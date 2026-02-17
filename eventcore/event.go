@@ -21,12 +21,12 @@ func ProcessEvent(event *bpfloader.FileChangeEvent, bpf *bpfloader.BPF, policy *
 
 	payload.AfterSize = event.AfterSize
 	payload.BeforeSize = event.BeforeSize
-	payload.FileSize = event.FileSize
+	payload.FileSize = event.AfterSize
 
 	payload.CheckSum = "dummy"
-	payload.Username = resolveUsername(event.Uid, event.Gid)
+	payload.Username = resolveUsername(event.Uid)
 	payload.FromIp = getHostIP().String()
-	payload.TimeStamp = convertMtimeToISO(event.Mtime)
+	payload.TimeStamp = time.Now().Format("2006-01-02 03:04:05 PM")
 	payload.Tty = resolveTtyName(event.TtyMajor, event.TtyIndex)
 
 	if event.ChangeType == 1 {
@@ -164,7 +164,7 @@ returns : "Unknown" if unable to lookup
 
 	: "<username>" if uid and gid are found
 */
-func resolveUsername(uid uint32, gid uint32) string {
+func resolveUsername(uid uint32) string {
 
 	u, err := user.LookupId(fmt.Sprint(uid))
 	if err != nil {
@@ -190,28 +190,4 @@ func getHostIP() net.IP {
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP
-}
-
-/*
-ConvertMtimeToISO
-
-@mtime  : mtime obtained from task struct in eBPF (seconds since epoch)
-@return : "Unknown" if unable to convert
-
-	"YYYY-MM-DD hh:MM:SS AM/PM" in IST
-*/
-func convertMtimeToISO(mtime int64) string {
-	if mtime <= 0 {
-		return "Unknown"
-	}
-
-	ist, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		return "Unknown"
-	}
-
-	t := time.Unix(mtime, 0).In(ist)
-
-	// 12-hour format with AM/PM
-	return t.Format("2006-01-02 03:04:05 PM")
 }
