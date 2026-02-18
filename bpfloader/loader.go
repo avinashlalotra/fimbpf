@@ -129,27 +129,29 @@ func (b *BPF) AttachPrograms() ([]link.Link, error) {
 		links = append(links, l)
 	}
 
-	// attachTracing := func(prog *ebpf.Program, name string) {
-	// 	l, linkErr := link.AttachTracing(link.TracingOptions{
-	// 		Program: prog,
-	// 	})
-	// 	if linkErr != nil {
-	// 		err += fmt.Sprintf("ERROR attaching %s: %v\n", name, linkErr)
-	// 		return
-	// 	}
-	// 	links = append(links, l)
-	// }
+	attachTracing := func(prog *ebpf.Program, name string) {
+		l, linkErr := link.AttachTracing(link.TracingOptions{
+			Program: prog,
+		})
+		if linkErr != nil {
+			err += fmt.Sprintf("ERROR attaching %s: %v\n", name, linkErr)
+			return
+		}
+		links = append(links, l)
+	}
 
 	// LSM Hooks
-	// attachLSM(b.Objects.InodeInitSecurityHook, "inode_create hook")
-	// attachLSM(b.Objects.PathRmdirHook, "path_rmdir hook")
-	// attachLSM(b.Objects.PathUnlinkHook, "path_unlink hook")
-	attachLSM(b.Objects.WatchdD_instantiate, "d_instantiate hook")
-	attachLSM(b.Objects.WatchdInodeUnlink, "inode_unlink hook")
+	// create
+	attachLSM(b.Objects.WatchdInodeCreate, "inode_create hook")
+	attachLSM(b.Objects.WatchdInodeMkdir, "inode_mkdir hook")
 
-	// // Tracing Hooks
-	// attachTracing(b.Objects.VfsWriteEntryHook, "vfs_write entry hook")
-	// attachTracing(b.Objects.VfsWriteHook, "vfs_write hook")
+	// delete
+	attachLSM(b.Objects.WatchdInodeUnlink, "inode_unlink hook")
+	attachLSM(b.Objects.WatchdInodeRmdir, "inode_rmdir hook")
+
+	// Tracing Hooks
+	// write
+	attachTracing(b.Objects.VfsWriteExitHook, "vfs_write exit hook")
 
 	// If None is loaded then error
 	for _, link := range links {

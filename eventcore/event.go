@@ -15,9 +15,14 @@ import (
 	"watchd/preprocess"
 )
 
-func ProcessEvent(event *bpfloader.FileChangeEvent, bpf *bpfloader.BPF, policy *preprocess.Cache) netlog.Payload {
+func ProcessEvent(event *bpfloader.FileChangeEvent, bpf *bpfloader.BPF, policy *preprocess.Cache) (netlog.Payload, bool) {
 
 	var payload netlog.Payload
+
+	// if Filter returns false then only process the event
+	if Filter(event, policy.FilterList) {
+		return payload, false
+	}
 
 	payload.AfterSize = event.AfterSize
 	payload.BeforeSize = event.BeforeSize
@@ -29,22 +34,25 @@ func ProcessEvent(event *bpfloader.FileChangeEvent, bpf *bpfloader.BPF, policy *
 	payload.TimeStamp = time.Now().Format("2006-01-02 03:04:05 PM")
 	payload.Tty = resolveTtyName(event.TtyMajor, event.TtyIndex)
 
-	if event.ChangeType == 1 {
+	chngType := event.ChangeType & 0xF
+	bytes := event.ChangeType >> 4
+
+	if chngType == 1 {
 		payload.ChangeType = "CREATE"
 		bpf.UpdateLookupTable(event)
 		updatePathCache(event, &policy.PathCache)
-	} else if event.ChangeType == 2 {
-		payload.ChangeType = "MODIFY"
-	} else if event.ChangeType == 3 {
+	} else if chngType == 3 {
 		payload.ChangeType = "DELETE"
-
+	} else if chngType == 2 {
+		payload.ChangeType = fmt.Sprintf("MODIFY [%d bytes]", bytes)
 	} else {
-		payload.ChangeType = "COURRPTED"
+		payload.ChangeType = "UNKNOWN"
 	}
 
-	payload.FilePath = constructPath(event, &policy.PathCache)
+	// payload.FilePath = constructPath(event, &policy.PathCache)
+	payload.FilePath = preprocess.CString(event.Filename[:])
 
-	return payload
+	return payload, true
 }
 
 func PrintPayload(payload netlog.Payload) {
@@ -102,19 +110,41 @@ func constructPath(event *bpfloader.FileChangeEvent, p *preprocess.PathCache) st
 }
 
 func pfs(ref *preprocess.CacheValue, p *preprocess.PathCache) string {
-
-	if ref == nil || ref.Parent == nil {
+	if ref == nil {
 		return ""
 	}
 
-	parent_key := *ref.Parent
-	parent_value, ok := p.Get(parent_key)
-	if !ok {
-		return ""
+	const maxDepth = 10
+
+	var parts []string
+	current := ref
+
+	for i := 0; i < maxDepth; i++ {
+		if current == nil {
+			break
+		}
+
+		parts = append(parts, current.Filename)
+
+		if current.Parent == nil {
+			break
+		}
+
+		parentKey := *current.Parent
+		parentValue, ok := p.Get(parentKey)
+		if !ok {
+			break
+		}
+
+		current = &parentValue
 	}
 
-	return pfs(&parent_value, p) + "/" + ref.Filename
+	// Reverse parts because we collected leaf → root
+	for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+		parts[i], parts[j] = parts[j], parts[i]
+	}
 
+	return "/" + strings.Join(parts, "/")
 }
 
 /*
@@ -190,4 +220,32 @@ func getHostIP() net.IP {
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP
+}
+
+// return False if filtered
+// On false log the event and send to api
+func Filter(event *bpfloader.FileChangeEvent, filterList preprocess.FilterList) bool {
+
+	// check for extension
+	file := preprocess.CString(event.Filename[:])
+
+	ext := filepath.Ext(file)
+
+	_, ok := filterList.IgnoredExtensions[ext]
+	if ok {
+		fmt.Println("Filtered by extension")
+		return true
+	}
+
+	// check for suffix
+
+	for _, suffix := range filterList.IgnoredSuffixes {
+		if strings.HasSuffix(file, suffix) {
+			fmt.Println("Filtered by suffix")
+			return true
+		}
+	}
+
+	return false
+
 }

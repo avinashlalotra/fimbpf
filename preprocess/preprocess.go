@@ -7,14 +7,20 @@ import (
 	"watchd/bpfloader"
 )
 
+type FilterList struct {
+	IgnoredSuffixes   []string
+	IgnoredExtensions map[string]uint8
+}
+
 type Cache struct {
 	LookupTable bpfloader.TrackedFileMap
 	PathCache   PathCache
+	FilterList
 }
 
 func ParseConfig(configPath string) (Cache, error) {
 
-	lookupTable, pathCache, err := parseConfig(configPath)
+	lookupTable, pathCache, filterList, err := parseConfig(configPath)
 	if err != nil {
 		return Cache{}, err
 	}
@@ -25,6 +31,7 @@ func ParseConfig(configPath string) (Cache, error) {
 	return Cache{
 		LookupTable: lookupTable,
 		PathCache:   pathCache,
+		FilterList:  filterList,
 	}, nil
 }
 
@@ -49,18 +56,23 @@ func (p *Cache) LoadTrackedFileMap(bpf *bpfloader.BPF) (int, error) {
 }
 
 /* -------------------------------------------------------------------------------------- Internal Helpers -----------------------------------*/
-func parseConfig(configPath string) (bpfloader.TrackedFileMap, PathCache, error) {
+func parseConfig(configPath string) (bpfloader.TrackedFileMap, PathCache, FilterList, error) {
 
 	/* For ebpf lookup table*/
 	tokens, err := ReadConfig(configPath)
 	if err != nil {
-		return nil, PathCache{}, err
+		return nil, PathCache{}, FilterList{}, err
 	}
 	if err := SyntaxValidation(tokens); err != nil {
-		return nil, PathCache{}, err
+		return nil, PathCache{}, FilterList{}, err
 	}
 
 	exlPol := parseExcludePolicy(tokens)
+
+	filterList := FilterList{
+		IgnoredSuffixes:   exlPol.excludeSuffs,
+		IgnoredExtensions: exlPol.excludeExts,
+	}
 
 	ret, err := constructPolicyMap(tokens, exlPol)
 
@@ -79,7 +91,7 @@ func parseConfig(configPath string) (bpfloader.TrackedFileMap, PathCache, error)
 	fmt.Println("Path Cache items: ", len(path_cache.cache))
 	fmt.Println("Path Cache Size: ", (len(path_cache.cache)*17.0)/1024.0, " KB")
 
-	return ret, path_cache, nil
+	return ret, path_cache, filterList, nil
 
 }
 
@@ -96,8 +108,9 @@ func (p *PathCache) initPathCache() PathCache {
 
 /* Internal helpers */
 /* Don't touch this */
+
 func rawDev(st *syscall.Stat_t) uint64 {
-	major := uint32((st.Dev >> 8) & 0xfff)
-	minor := uint32((st.Dev & 0xff) | ((st.Dev >> 12) & 0xfff00))
-	return (uint64(major) << 20) | uint64(minor)
+	major := uint64(st.Dev >> 8)
+	minor := uint64(st.Dev & 0xff)
+	return (major << 20) | minor
 }

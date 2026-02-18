@@ -212,6 +212,20 @@ func parseExcludePolicy(tokens []token) excludePolicy {
 		}
 	}
 
+	//debug
+	for k, v := range exlPol.excludeDirs {
+		fmt.Printf("excludeDirs: %v -> %d\n", k, v)
+	}
+	for k, v := range exlPol.excludeFiles {
+		fmt.Printf("excludeFiles: %v -> %d\n", k, v)
+	}
+	for k, v := range exlPol.excludeExts {
+		fmt.Printf("excludeExts: %v -> %d\n", k, v)
+	}
+	for _, v := range exlPol.excludeSuffs {
+		fmt.Printf("excludeSuffs: %v\n", v)
+	}
+
 	return exlPol
 }
 

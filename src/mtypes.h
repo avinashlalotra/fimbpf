@@ -4,9 +4,9 @@
 #include "vmlinux.h"
 
 #define NAME_MAX 255
-#define CREATE 1
-#define MODIFY 2
-#define DELETE 3
+#define CREATE 0x1
+#define MODIFY 0x2
+#define DELETE 0x3
 
 #ifndef S_IFMT
 #define S_IFMT 0170000
@@ -32,7 +32,7 @@ struct EVENT {
 
   // for username in userspace
   __u32 uid;
-  __u32 change_type;
+  __u32 change_type; // [31:4] bytes written ,[3:0] event type
 
   // tty
   __u32 tty_index;

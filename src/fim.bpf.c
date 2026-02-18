@@ -8,30 +8,30 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-//----------------------------------- CREATE ---------------------------------
-SEC("lsm/d_instantiate")
-int BPF_PROG(watchd_d_instantiate, struct dentry *dentry, struct inode *inode) {
-
+//----------------------------------- CREATE FILE
+//---------------------------------
+SEC("lsm/inode_create")
+int BPF_PROG(watchd_inode_create, struct inode *dir, struct dentry *dentry,
+             umode_t mode) {
   struct KEY key = {};
   struct EVENT *event;
   struct task_struct *task;
   struct VALUE *val;
-  umode_t mode;
+  struct inode *inode;
   __u64 uid_gid;
 
-  // make key
-  key.inode = BPF_CORE_READ(dentry, d_parent, d_inode, i_ino);
-  key.dev = BPF_CORE_READ(dentry, d_parent, d_inode, i_sb, s_dev);
+  // parent key
+  key.inode = BPF_CORE_READ(dir, i_ino);
+  key.dev = BPF_CORE_READ(dir, i_sb, s_dev);
 
   val = bpf_map_lookup_elem(&policy_table, &key);
-
   if (!val)
     return 0;
 
+  inode = BPF_CORE_READ(dentry, d_inode);
   event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
-  if (!event) {
+  if (!event)
     return 0;
-  }
 
   event->parent_dev = key.dev;
   event->parent_inode_number = key.inode;
@@ -42,27 +42,71 @@ int BPF_PROG(watchd_d_instantiate, struct dentry *dentry, struct inode *inode) {
 
   event->change_type = CREATE;
 
-  mode = BPF_CORE_READ(inode, i_mode);
-  if (S_ISDIR(mode)) {
-    event->after_size = DIR_SIZE;
-  } else {
-    event->after_size = 0;
-  }
-
   event->before_size = 0;
+  event->after_size = 0; // new file starts empty
 
-  // populate rest of the event structure
+  event->inode_number = BPF_CORE_READ(inode, i_ino);
+  event->dev = BPF_CORE_READ(inode, i_sb, s_dev);
 
-  event->inode_number = (__u32)BPF_CORE_READ(inode, i_ino);
-  event->dev = (__u32)BPF_CORE_READ(inode, i_sb, s_dev);
   uid_gid = bpf_get_current_uid_gid();
   event->uid = (__u32)(uid_gid & 0xffffffff);
-  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename),
-                            dentry->d_name.name);
 
-  // submit event to ring buffer
+  const unsigned char *name = BPF_CORE_READ(dentry, d_name.name);
+  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
+
   bpf_ringbuf_submit(event, 0);
+  return 0;
+}
 
+//----------------------------------- CREATE DIR
+//---------------------------------
+SEC("lsm/inode_mkdir")
+int BPF_PROG(watchd_inode_mkdir, struct inode *dir, struct dentry *dentry,
+             umode_t mode) {
+  struct KEY key = {};
+  struct EVENT *event;
+  struct task_struct *task;
+  struct VALUE *val;
+  struct inode *inode;
+  __u64 uid_gid;
+
+  key.inode = BPF_CORE_READ(dir, i_ino);
+  key.dev = BPF_CORE_READ(dir, i_sb, s_dev);
+
+  val = bpf_map_lookup_elem(&policy_table, &key);
+  if (!val)
+    return 0;
+
+  inode = BPF_CORE_READ(dentry, d_inode);
+  if (!inode)
+    return 0;
+
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (!event)
+    return 0;
+
+  event->parent_dev = key.dev;
+  event->parent_inode_number = key.inode;
+
+  task = (struct task_struct *)bpf_get_current_task();
+  event->tty_major = BPF_CORE_READ(task, signal, tty, driver, major);
+  event->tty_index = BPF_CORE_READ(task, signal, tty, index);
+
+  event->change_type = CREATE;
+
+  event->before_size = 0;
+  event->after_size = DIR_SIZE; // your constant for directory
+
+  event->inode_number = BPF_CORE_READ(inode, i_ino);
+  event->dev = BPF_CORE_READ(inode, i_sb, s_dev);
+
+  uid_gid = bpf_get_current_uid_gid();
+  event->uid = (__u32)(uid_gid & 0xffffffff);
+
+  const unsigned char *name = BPF_CORE_READ(dentry, d_name.name);
+  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
+
+  bpf_ringbuf_submit(event, 0);
   return 0;
 }
 
@@ -111,8 +155,8 @@ int BPF_PROG(watchd_inode_unlink, struct inode *dir, struct dentry *dentry) {
   event->dev = BPF_CORE_READ(dentry, d_inode, i_sb, s_dev);
   uid_gid = bpf_get_current_uid_gid();
   event->uid = (__u32)(uid_gid & 0xffffffff);
-  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename),
-                            dentry->d_name.name);
+  const unsigned char *name = BPF_CORE_READ(dentry, d_name.name);
+  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
 
   // submit event to ring buffer
   bpf_ringbuf_submit(event, 0);
@@ -120,110 +164,128 @@ int BPF_PROG(watchd_inode_unlink, struct inode *dir, struct dentry *dentry) {
   return 0;
 }
 
-// //------------------------------- MODIFY ------------------------------------
+SEC("lsm/inode_rmdir")
+int BPF_PROG(watchd_inode_rmdir, struct inode *dir, struct dentry *dentry) {
 
-// SEC("fentry/vfs_write")
-// int BPF_PROG(vfs_write_entry_hook, struct file *file, const char *buf,
-//              size_t count, loff_t *pos) {
+  struct KEY key = {};
+  struct EVENT *event;
+  struct task_struct *task;
+  struct VALUE *val;
+  umode_t mode;
+  __u64 uid_gid;
 
-//   struct inode *inode;
-//   struct KEY key = {};
-//   __u64 *val;
-//   __u64 pid_tgid;
-//   __u64 before_size;
+  // make key
+  key.inode = BPF_CORE_READ(dentry, d_inode, i_ino);
+  key.dev = BPF_CORE_READ(dentry, d_inode, i_sb, s_dev);
 
-//   /* Check the inode that is being written */
-//   key.inode_number = BPF_CORE_READ(file, f_inode, i_ino);
-//   key.dev_id = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+  val = bpf_map_lookup_elem(&policy_table, &key);
+  if (!val)
+    return 0;
 
-//   // #ifdef DEBUG
-//   //   bpf_printk("hit vfs_write_entry_hook \n");
-//   // #endif
+  // delete from policy table
+  bpf_map_delete_elem(&policy_table, &key);
 
-//   val = bpf_map_lookup_elem(&policy_table, &key);
-//   if (!val)
-//     return 0;
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (!event) {
+    return 0;
+  }
 
-// #ifdef DEBUG
-//   bpf_printk("A file will be written in restricted folders \n");
-// #endif
-//   pid_tgid = bpf_get_current_pid_tgid();
-//   before_size = BPF_CORE_READ(file, f_inode, i_size);
-//   bpf_map_update_elem(&file_size_map, &pid_tgid, &before_size, BPF_ANY);
+  event->parent_dev = BPF_CORE_READ(dir, i_sb, s_dev);
+  event->parent_inode_number = BPF_CORE_READ(dir, i_ino);
 
-//   return 0;
-// }
+  task = (struct task_struct *)bpf_get_current_task();
+  event->tty_major = BPF_CORE_READ(task, signal, tty, driver, major);
+  event->tty_index = BPF_CORE_READ(task, signal, tty, index);
 
-// SEC("fexit/vfs_write")
-// int BPF_PROG(vfs_write_hook, struct file *file, const char *buf, size_t
-// count,
-//              loff_t *pos, ssize_t ret) {
+  event->change_type = DELETE;
+  event->before_size = val->file_size;
+  event->after_size = 0;
 
-//   struct EVENT *transaction;
-//   struct task_struct *task;
-//   struct inode *inode;
-//   struct inode *parent_inode;
-//   struct dentry *dentry;
-//   struct dentry *parent_dentry;
-//   __u32 *val;
-//   __u64 pid_tgid;
-//   __s64 *before_size;
+  // populate rest of the event structure
 
-//   pid_tgid = bpf_get_current_pid_tgid();
+  event->inode_number = BPF_CORE_READ(dentry, d_inode, i_ino);
+  event->dev = BPF_CORE_READ(dentry, d_inode, i_sb, s_dev);
+  uid_gid = bpf_get_current_uid_gid();
+  event->uid = (__u32)(uid_gid & 0xffffffff);
+  const unsigned char *name = BPF_CORE_READ(dentry, d_name.name);
+  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
 
-//   before_size = bpf_map_lookup_elem(&file_size_map, &pid_tgid);
+  // submit event to ring buffer
+  bpf_ringbuf_submit(event, 0);
 
-//   // #ifdef DEBUG
-//   //   bpf_printk("hit vfs_write_hook \n");
-//   // #endif
+  return 0;
+}
 
-//   if (!before_size)
-//     return 0;
+//------------------------------- MODIFY ------------------------------------
 
-//   bpf_map_delete_elem(&file_size_map, &pid_tgid);
+SEC("fexit/vfs_write")
+int BPF_PROG(vfs_write_exit_hook, struct file *file, const char *buf,
+             size_t count, loff_t *pos, ssize_t ret) {
 
-// #ifdef DEBUG
-//   bpf_printk("A directory is deleted in restricted folders \n");
-// #endif
+  struct KEY key = {};
+  struct EVENT *event;
+  struct task_struct *task;
+  struct VALUE *val;
+  __u64 uid_gid;
 
-//   task = (struct task_struct *)bpf_get_current_task();
-//   inode = BPF_CORE_READ(file, f_inode);
-//   dentry = BPF_CORE_READ(file, f_path.dentry);
+  // if no bytes are written then return early
+  if (ret <= 0) {
+    return 0;
+  }
 
-//   transaction = bpf_ringbuf_reserve(&events, sizeof(*transaction), 0);
-//   if (!transaction) {
-//     bpf_printk("Failed to reserve ring buffer space\n");
-//     return 0;
-//   }
-//   /* populate event structure */
-//   transaction->parent_inode_number = 0;
-//   transaction->parent_dev = 0;
+  /* Check the inode that is being written */
+  key.inode = BPF_CORE_READ(file, f_inode, i_ino);
+  key.dev = BPF_CORE_READ(file, f_inode, i_sb, s_dev);
 
-//   /* Get parent dentry and inode */
-//   parent_dentry = BPF_CORE_READ(dentry, d_parent);
-//   if (parent_dentry) {
-//     parent_inode = BPF_CORE_READ(parent_dentry, d_inode);
-//     if (parent_inode) {
-//       transaction->parent_inode_number = BPF_CORE_READ(parent_inode, i_ino);
-//       transaction->parent_dev = BPF_CORE_READ(parent_inode, i_sb, s_dev);
-//     }
-//   }
+  val = bpf_map_lookup_elem(&policy_table, &key);
+  if (!val)
+    return 0;
 
-//   transaction->tty_major = BPF_CORE_READ(task, signal, tty, driver, major);
-//   transaction->tty_index = BPF_CORE_READ(task, signal, tty, index);
+  event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+  if (!event) {
+    return 0;
+  }
 
-//   transaction->change_type = MODIFY;
-//   transaction->file_size = *before_size;
+  event->parent_dev =
+      BPF_CORE_READ(file, f_path.dentry, d_parent, d_inode, i_sb, s_dev);
+  event->parent_inode_number =
+      BPF_CORE_READ(file, f_path.dentry, d_parent, d_inode, i_ino);
 
-//   transaction->inode_number = (__u64)BPF_CORE_READ(inode, i_ino);
-//   transaction->dev = (__u64)BPF_CORE_READ(inode, i_sb, s_dev);
-//   uid_gid = bpf_get_current_uid_gid();
-//   transaction->uid = (__u32)(uid_gid & 0xffffffff);
-//   transaction->gid = (__u32)(uid_gid >> 32);
-//   bpf_probe_read_str(transaction->filename, sizeof(transaction->filename),
-//                      file->f_path.dentry->d_name.name);
+  task = (struct task_struct *)bpf_get_current_task();
+  event->tty_major = BPF_CORE_READ(task, signal, tty, driver, major);
+  event->tty_index = BPF_CORE_READ(task, signal, tty, index);
 
-//   bpf_ringbuf_submit(transaction, 0);
+  event->change_type = MODIFY;
+  event->change_type |= ret << 4;
+  event->before_size = val->file_size;
+  event->after_size = BPF_CORE_READ(file, f_inode, i_size);
+  val->file_size = event->after_size;
 
-//   return 0;
-// }
+  // update map for new size
+  bpf_map_update_elem(&policy_table, &key, val, BPF_ANY);
+
+  // populate rest of the event structure
+
+  event->inode_number = key.inode;
+  event->dev = key.dev;
+  uid_gid = bpf_get_current_uid_gid();
+  event->uid = (__u32)(uid_gid & 0xffffffff);
+
+  const unsigned char *name = BPF_CORE_READ(file->f_path.dentry, d_name.name);
+  bpf_probe_read_kernel_str(event->filename, sizeof(event->filename), name);
+
+  // submit event to ring buffer
+  bpf_ringbuf_submit(event, 0);
+
+  return 0;
+}
+
+// ----------------------------- Rename ---------------------------------
+
+SEC("lsm/inode_rename")
+int BPF_PROG(watchd_inode_rename, struct inode *old_dir,
+             struct dentry *old_dentry, struct inode *new_dir,
+             struct dentry *new_dentry) {
+
+  return 0;
+}

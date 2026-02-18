@@ -21,11 +21,3 @@ struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, EVENTS_MAX_ENTRIES);
 } events SEC(".maps");
-
-/* File Size Map */
-struct {
-  __uint(type, BPF_MAP_TYPE_LRU_HASH);
-  __uint(max_entries, 1024);
-  __type(key, __u64);
-  __type(value, __s64);
-} file_size_map SEC(".maps");

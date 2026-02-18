@@ -147,6 +147,7 @@ func main() {
 						log.Printf("reading from ring buffer: %v", err)
 						continue
 					}
+					log.Printf("event occurred\n")
 
 					// Pstringarse the event
 					var event bpfloader.FileChangeEvent
@@ -156,10 +157,12 @@ func main() {
 					}
 
 					// Process and display the event
-					payload := eventcore.ProcessEvent(&event, bpf, &policy)
-					eventcore.PrintPayload(payload)
-					if enableNet {
-						netlog.SendPOST(payload)
+					payload, ok := eventcore.ProcessEvent(&event, bpf, &policy)
+					if ok {
+						eventcore.PrintPayload(payload)
+						if enableNet {
+							netlog.SendPOST(payload)
+						}
 					}
 
 				}

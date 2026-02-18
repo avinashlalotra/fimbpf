@@ -7,16 +7,52 @@ D: /home/abinash/Desktop/folderA
 # include particular files
 # IF: /home/abinash/Desktop/trackMe.txt
 
-# excluding particular file extensions
+# excluding particular file extensions (EE = extension exclude)
+
 EE: .json
 EE: .jsonl
-EE: .swp
-EE: .tmp
 EE: .log
+EE: .out
+EE: .err
+EE: .tmp
+EE: .temp
+EE: .swp
+EE: .swo
+EE: .swx
+EE: .bak
+EE: .old
+EE: .pid
+EE: .lock
+EE: .lck
+EE: .wal
+EE: .journal
+EE: .sqlite
+EE: .sqlite3
+EE: .db
+EE: .cache
+EE: .crdownload
+EE: .part
+EE: .o
+EE: .a
+EE: .so
+EE: .d
+EE: .cmd
 
-# excluding particular file suffixes
+
+# excluding particular file suffixes (ES = suffix exclude)
+
 ES: ~
 ES: .lock
+ES: .swp
+ES: .tmp
+ES: .bak
+ES: .old
+ES: .pid
+ES: .journal
+ES: .wal
+ES: .crdownload
+ES: .part
+ES: .
 
 
 # Excluding patterns is not supported yet
